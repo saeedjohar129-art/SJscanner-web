@@ -1,5 +1,5 @@
 // SJscanner offline cache
-const V = 'sj-v2';
+const V = 'sj-v3';
 const CORE = ['./', 'index.html', 'manifest.webmanifest', 'vendor/jspdf.umd.min.js', 'vendor/tesseract.min.js',
   'fonts/IBMPlexSansArabic-Regular.ttf', 'fonts/IBMPlexSansArabic-Medium.ttf', 'fonts/IBMPlexSansArabic-Bold.ttf',
   'icons/logo.png', 'icons/icon-192.png', 'icons/apple-touch-icon.png'];

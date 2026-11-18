@@ -442,6 +442,7 @@ function lineQuad(c) {
     if (mx) peaks.push({t, r: r - diag, v}); }
   peaks.sort((a, b) => b.v - a.v);
   const lines = peaks.slice(0, 26);
+  lines.push({t: 90, r: 0, b: 1}, {t: 90, r: h - 1, b: 1}, {t: 0, r: 0, b: 1}, {t: 0, r: w - 1, b: 1});
   const hor = lines.filter(l => Math.abs(l.t - 90) < 45), ver = lines.filter(l => Math.abs(l.t - 90) >= 45);
   const inter = (a, b) => { const c1 = cs[a.t], s1 = sn[a.t], c2 = cs[b.t], s2 = sn[b.t], det = c1*s2 - s1*c2; if (Math.abs(det) < 1e-6) return null; return [(a.r*s2 - s1*b.r) / det, (c1*b.r - a.r*c2) / det]; };
   // how much of a segment is backed by a real edge running along it
@@ -459,6 +460,19 @@ function lineQuad(c) {
       const din = G(fx + nx*4, fy + ny*4) - G(fx - nx*4, fy - ny*4);
       if (din > 4) pos++; else if (din < -4) neg++; }
     return Math.max(pos, neg) / (n + 1); };
+  // reference paper brightness: bright part of the image centre
+  const cen = []; for (let y = Math.round(h * .3); y < h * .7; y += 2) for (let X = Math.round(w * .3); X < w * .7; X += 2) cen.push(g[y*w + X]);
+  cen.sort((a, b) => a - b); const ref = cen.length ? cen[Math.floor(cen.length * .8)] : 200;
+  const {mag} = E;
+  // share of points just inside a side that look like blank paper margin
+  const inner = (p, q, cx, cy) => { const L = Math.hypot(q[0]-p[0], q[1]-p[1]); if (L < 8) return 0; const n = Math.floor(L / 3);
+    let nx = -(q[1]-p[1]) / L, ny = (q[0]-p[0]) / L; const mx = (p[0]+q[0]) / 2, my = (p[1]+q[1]) / 2; if ((cx - mx) * nx + (cy - my) * ny < 0) { nx = -nx; ny = -ny; }
+    let ok = 0;
+    for (let s = 0; s <= n; s++) { for (const off of [6, 11]) { const fx = p[0] + (q[0]-p[0]) * s / n + nx * off, fy = p[1] + (q[1]-p[1]) * s / n + ny * off;
+      const xx = Math.min(w - 2, Math.max(1, Math.round(fx))), yy = Math.min(h - 2, Math.max(1, Math.round(fy))), i = yy*w + xx;
+      if (g[i] >= ref * .8 && mag[i] < Math.max(thr, 20)) { ok++; break; } } }
+    return ok / (n + 1); };
+  const onBorder = (p, q) => (Math.abs(p[0]) < 3 && Math.abs(q[0]) < 3) || (Math.abs(p[0] - (w-1)) < 3 && Math.abs(q[0] - (w-1)) < 3) || (Math.abs(p[1]) < 3 && Math.abs(q[1]) < 3) || (Math.abs(p[1] - (h-1)) < 3 && Math.abs(q[1] - (h-1)) < 3);
   const area = q => { let a = 0; for (let i = 0; i < 4; i++) { const p = q[i], r = q[(i+1)%4]; a += p[0]*r[1] - r[0]*p[1]; } return Math.abs(a) / 2; };
   let best = null, bestScore = 0; const cands = []; const mgx = w * .04, mgy = h * .04;
   for (let a = 0; a < hor.length; a++) for (let b = a + 1; b < hor.length; b++) {
@@ -474,19 +488,26 @@ function lineQuad(c) {
       const Q = [0, 1, 2, 3].map(i => P[(st + i) % 4]);
       if (!quadOk(Q, w, h)) continue;
       const ar = area(Q) / (w * h); if (ar < .15 || ar > .995) continue;
-      const sup = [0, 1, 2, 3].map(i => support(Q[i], Q[(i+1)%4], cx, cy));
+      const inn = [0, 1, 2, 3].map(i => inner(Q[i], Q[(i+1)%4], cx, cy));
+      const imn = Math.min(...inn), iavg = (inn[0] + inn[1] + inn[2] + inn[3]) / 4;
+      if (imn < .45) continue;
+      const brd = [0, 1, 2, 3].map(i => onBorder(Q[i], Q[(i+1)%4]));
+      if (brd.filter(Boolean).length > 2) continue;
+      const sup = [0, 1, 2, 3].map(i => brd[i] ? .8 : support(Q[i], Q[(i+1)%4], cx, cy));
       const mn = Math.min(...sup), avg = (sup[0] + sup[1] + sup[2] + sup[3]) / 4;
       if (mn < .3 || avg < .45) continue;
-      const score = avg * (.6 + .4 * mn) + .3 * Math.sqrt(ar);
-      cands.push({Q, ar, avg, mn, score});
-      if (score > bestScore) { bestScore = score; best = Q; }
+      const score = avg * (.6 + .4 * mn) + .3 * Math.sqrt(ar) + .5 * iavg - (brd.some(Boolean) ? .15 : 0);
+      const border = brd.some(Boolean);
+      cands.push({Q, ar, avg, mn, imn, score, border});
+      if (!border && score > bestScore) { bestScore = score; best = Q; }
     } }
+  if (!best) for (const cd of cands) if (cd.score > bestScore) { bestScore = cd.score; best = cd.Q; }
   if (!best) return null;
   // the paper encloses its own content (text block, tables): among solid
   // candidates that contain the best one, take the largest
   const inside = (Q, p) => { for (let i = 0; i < 4; i++) { const a = Q[i], b = Q[(i+1)%4]; if ((b[0]-a[0])*(p[1]-a[1]) - (b[1]-a[1])*(p[0]-a[0]) < -3 * Math.hypot(b[0]-a[0], b[1]-a[1])) return false; } return true; };
   let bestAr = 0; for (const cd of cands) if (cd.Q === best) bestAr = cd.ar;
-  for (const cd of cands) if (cd.ar > bestAr && cd.avg >= .5 && cd.mn >= .35 && best.every(p => inside(cd.Q, p))) { bestAr = cd.ar; best = cd.Q; }
+  for (const cd of cands) if (!cd.border && cd.ar > bestAr && cd.avg >= .5 && cd.mn >= .35 && cd.imn >= .6 && best.every(p => inside(cd.Q, p))) { bestAr = cd.ar; best = cd.Q; }
   const W = c.width, H = c.height;
   return best.map(([X, Y]) => [Math.min(W, Math.max(0, X / k)), Math.min(H, Math.max(0, Y / k))]);
 }
@@ -523,7 +544,9 @@ function warp(c, q, max) {
   ox.putImageData(od, 0, 0); return o;
 }
 const CURVE = new Uint8ClampedArray(256);
-for (let i = 0; i < 256; i++) { const v = i / 255; const t = v >= .9 ? 1 : Math.pow(v / .9, 1.8); CURVE[i] = 255 * t; } // paper -> pure white, ink deeper
+// input: pixel / local paper colour (255 = paper). Paper -> white, faint
+// print is stretched so light inks stay readable.
+for (let i = 0; i < 256; i++) { const r = i / 255; let t = (r - .45) / (.95 - .45); t = t < 0 ? 0 : t > 1 ? 1 : t; CURVE[i] = 255 * Math.pow(t, 1.35); }
 // unsharp mask: makes small print crisper
 function sharpen(c, amount) {
   const w = c.width, h = c.height, x = c.getContext('2d', {willReadFrequently: true}), id = x.getImageData(0, 0, w, h), d = id.data;
@@ -560,9 +583,9 @@ function filt(src, f) {
   const bx = bc.getContext('2d', {willReadFrequently: true}); bx.imageSmoothingEnabled = true; bx.imageSmoothingQuality = 'high'; bx.drawImage(gc, 0, 0, w, h);
   const bd = bx.getImageData(0, 0, w, h).data;
   for (let i = 0; i < N*4; i += 4) {
-    const r = Math.min(255, d[i] / Math.max(bd[i], 1) * 272), g = Math.min(255, d[i+1] / Math.max(bd[i+1], 1) * 272), b = Math.min(255, d[i+2] / Math.max(bd[i+2], 1) * 272);
+    const r = Math.min(255, d[i] / Math.max(bd[i], 1) * 255), g = Math.min(255, d[i+1] / Math.max(bd[i+1], 1) * 255), b = Math.min(255, d[i+2] / Math.max(bd[i+2], 1) * 255);
     if (f === 'enh') { d[i] = CURVE[r|0]; d[i+1] = CURVE[g|0]; d[i+2] = CURVE[b|0]; }
-    else { const L = .299*r + .587*g + .114*b; const v = f === 'gray' ? CURVE[L|0] : L < 160 ? 0 : L > 205 ? 255 : (L - 160) / 45 * 255; d[i] = d[i+1] = d[i+2] = v; }
+    else { const L = .299*r + .587*g + .114*b; const v = f === 'gray' ? CURVE[L|0] : L < 185 ? 0 : L > 222 ? 255 : (L - 185) / 37 * 255; d[i] = d[i+1] = d[i+2] = v; }
   }
   x.putImageData(id, 0, 0);
   if (f !== 'bw') sharpen(src, f === 'enh' ? .9 : .8);
