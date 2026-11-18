@@ -579,7 +579,7 @@ function filt(src, f) {
   if (f === 'orig') return src;
   const w = src.width, h = src.height, N = w * h;
   const x = src.getContext('2d', {willReadFrequently: true}), id = x.getImageData(0, 0, w, h), d = id.data;
-  const cs = Math.max(6, Math.round(Math.max(w, h) / 40)), gw = Math.ceil(w / cs), gh = Math.ceil(h / cs);
+  const cs = Math.max(6, Math.round(Math.max(w, h) / 75)), gw = Math.ceil(w / cs), gh = Math.ceil(h / cs);
   const cell = new Float32Array(gw * gh * 3), lum = new Float32Array(gw * gh);
   for (let gy = 0; gy < gh; gy++) for (let gx = 0; gx < gw; gx++) {
     const x0 = gx*cs, y0 = gy*cs, x1 = Math.min(w, x0+cs), y1 = Math.min(h, y0+cs); let s = 0, n = 0;
@@ -590,9 +590,14 @@ function filt(src, f) {
   }
   const gc = document.createElement('canvas'); gc.width = gw; gc.height = gh;
   const gctx = gc.getContext('2d'), gd = gctx.createImageData(gw, gh);
-  for (let gy = 0; gy < gh; gy++) for (let gx = 0; gx < gw; gx++) { let bj = gy*gw + gx;
-    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) { const yy = gy+dy, xx = gx+dx; if (yy < 0 || xx < 0 || yy >= gh || xx >= gw) continue; const j = yy*gw + xx; if (lum[j] > lum[bj]) bj = j; }
-    const o = (gy*gw + gx)*4; gd.data[o] = cell[bj*3]; gd.data[o+1] = cell[bj*3+1]; gd.data[o+2] = cell[bj*3+2]; gd.data[o+3] = 255; }
+  // each cell keeps its own paper estimate (so wrinkles and shadows are
+  // removed); only cells much darker than their neighbourhood (dense print,
+  // logos, stamps) are lifted to the neighbourhood level
+  for (let gy = 0; gy < gh; gy++) for (let gx = 0; gx < gw; gx++) { const j = gy*gw + gx; const nb = [];
+    for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) { const yy = gy+dy, xx = gx+dx; if (yy < 0 || xx < 0 || yy >= gh || xx >= gw) continue; nb.push(lum[yy*gw + xx]); }
+    nb.sort((a, b) => a - b); const med = nb[nb.length >> 1]; const cc = Math.max(cell[j*3], cell[j*3+1], cell[j*3+2]) - Math.min(cell[j*3], cell[j*3+1], cell[j*3+2]);
+    const k = (lum[j] < med * .6 || cc > 45) ? med / Math.max(1, lum[j]) : 1;
+    const o = j*4; gd.data[o] = Math.min(255, cell[j*3] * k); gd.data[o+1] = Math.min(255, cell[j*3+1] * k); gd.data[o+2] = Math.min(255, cell[j*3+2] * k); gd.data[o+3] = 255; }
   gctx.putImageData(gd, 0, 0);
   const bc = document.createElement('canvas'); bc.width = w; bc.height = h;
   const bx = bc.getContext('2d', {willReadFrequently: true}); bx.imageSmoothingEnabled = true; bx.imageSmoothingQuality = 'high'; bx.drawImage(gc, 0, 0, w, h);
@@ -630,9 +635,14 @@ async function getOrig(p) {
   if (!c) { c = await toCanvas(await getBlob('o:' + p.id), 99999); origCache.set(p.id, c); if (origCache.size > 3) origCache.delete(origCache.keys().next().value); }
   return c;
 }
+function trim(c, f) {
+  const mx = Math.round(c.width * f), my = Math.round(c.height * f);
+  const o = document.createElement('canvas'); o.width = c.width - 2*mx; o.height = c.height - 2*my;
+  o.getContext('2d').drawImage(c, -mx, -my); return o;
+}
 async function renderPage(p) {
   const o = await getOrig(p);
-  const c = rotate(filt(warp(o, p.quad, MAXP), p.filter), p.rot);
+  const c = rotate(filt(trim(warp(o, p.quad, MAXP), .008), p.filter), p.rot);
   const blob = await toBlob(c, .93);
   const old = procKey(p);
   p.v = (p.v || 0) + 1; p.pw = c.width; p.ph = c.height;
