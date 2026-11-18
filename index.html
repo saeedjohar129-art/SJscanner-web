@@ -268,7 +268,7 @@ svg.i{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.9;stro
 (() => {
 'use strict';
 const $ = s => document.querySelector(s);
-const MAXO = 2400, MAXP = 2200;
+const MAXO = 3000, MAXP = 2600;
 const FILTERS = [['enh','محسّن','sparkle'],['gray','رمادي','tone'],['bw','أبيض وأسود','bw'],['orig','الأصلي','img']];
 const MONTHS = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
 const tick = (ms = 30) => new Promise(r => setTimeout(r, ms));
@@ -328,7 +328,7 @@ function quadOk(q, w, h) {
   let ar = 0; for (let i = 0; i < 4; i++) { const a = q[i], b = q[(i+1)%4]; ar += a[0]*b[1] - b[0]*a[1]; }
   return Math.abs(ar) / 2 > w * h * .01;
 }
-function detect(c) {
+function regionQuad(c) {
   const W = c.width, H = c.height, k = Math.min(1, 320 / Math.max(W, H));
   const w = Math.max(8, Math.round(W * k)), h = Math.max(8, Math.round(H * k)), N = w * h;
   const t = document.createElement('canvas'); t.width = w; t.height = h;
@@ -378,7 +378,7 @@ function detect(c) {
     m = e; }
   let seed = -1, bd = 1e12; const cx = w / 2, cy = h / 2;
   for (let i = 0; i < N; i++) if (m[i]) { const dd = (i % w - cx) ** 2 + ((i / w | 0) - cy) ** 2; if (dd < bd) { bd = dd; seed = i; } }
-  if (seed < 0) return insetQuad(W, H);
+  if (seed < 0) return null;
   const st = [seed]; m[seed] = 2; let area = 0, s1 = 1e9, s2 = -1e9, d1 = 1e9, d2 = -1e9, tl, br, tr, bl;
   while (st.length) { const p = st.pop(); area++; const X = p % w, Y = p / w | 0, a = X + Y, b = X - Y;
     if (a < s1) { s1 = a; tl = [X, Y]; } if (a > s2) { s2 = a; br = [X, Y]; } if (b > d2) { d2 = b; tr = [X, Y]; } if (b < d1) { d1 = b; bl = [X, Y]; }
@@ -388,8 +388,113 @@ function detect(c) {
   const q = pts.map(([X, Y]) => { let dx = X - mx, dy = Y - my; const l = Math.hypot(dx, dy) || 1; dx /= l; dy /= l;
     return [Math.min(W, Math.max(0, (X + .5 + dx * ER * 1.41) / k)), Math.min(H, Math.max(0, (Y + .5 + dy * ER * 1.41) / k))]; });
   const fr = area / N;
-  if (fr < .08 || fr > .97 || !quadOk(q, W, H)) return insetQuad(W, H);
+  if (fr < .08 || fr > .97 || !quadOk(q, W, H)) return null;
   return q;
+}
+/* Edge-line detector: finds the four straight edges of the paper with a
+   Hough transform, so it works even when paper and background have the
+   same brightness (white paper on a white table or seat). */
+function edgeMap(c) {
+  const W = c.width, H = c.height, k = Math.min(1, 420 / Math.max(W, H));
+  const w = Math.max(16, Math.round(W * k)), h = Math.max(16, Math.round(H * k)), N = w * h;
+  const t = document.createElement('canvas'); t.width = w; t.height = h;
+  const x = t.getContext('2d', {willReadFrequently: true}); x.drawImage(c, 0, 0, w, h);
+  const d = x.getImageData(0, 0, w, h).data;
+  let g = new Float32Array(N);
+  for (let i = 0; i < N; i++) g[i] = .299*d[i*4] + .587*d[i*4+1] + .114*d[i*4+2];
+  for (let pass = 0; pass < 2; pass++) { // 3x3 box blur twice
+    const o = new Float32Array(N);
+    for (let y = 0; y < h; y++) for (let X = 0; X < w; X++) { let s = 0, n = 0;
+      for (let dy = -1; dy <= 1; dy++) { const yy = y + dy; if (yy < 0 || yy >= h) continue; for (let dx = -1; dx <= 1; dx++) { const xx = X + dx; if (xx < 0 || xx >= w) continue; s += g[yy*w+xx]; n++; } }
+      o[y*w+X] = s / n; }
+    g = o;
+  }
+  const mag = new Float32Array(N), gx = new Float32Array(N), gy = new Float32Array(N);
+  for (let y = 1; y < h - 1; y++) for (let X = 1; X < w - 1; X++) { const i = y*w + X;
+    const a = -g[i-w-1] - 2*g[i-1] - g[i+w-1] + g[i-w+1] + 2*g[i+1] + g[i+w+1];
+    const b = -g[i-w-1] - 2*g[i-w] - g[i-w+1] + g[i+w-1] + 2*g[i+w] + g[i+w+1];
+    gx[i] = a; gy[i] = b; mag[i] = Math.hypot(a, b); }
+  // non-maximum suppression along the gradient -> thin edges
+  const thin = new Float32Array(N);
+  for (let y = 1; y < h - 1; y++) for (let X = 1; X < w - 1; X++) { const i = y*w + X, m = mag[i]; if (m < 4) continue;
+    const ang = Math.atan2(gy[i], gx[i]); const ox = Math.round(Math.cos(ang)), oy = Math.round(Math.sin(ang));
+    if (m >= mag[i + oy*w + ox] && m >= mag[i - oy*w - ox]) thin[i] = m; }
+  const vals = []; for (let i = 0; i < N; i++) if (thin[i] > 0) vals.push(thin[i]);
+  vals.sort((a, b) => a - b);
+  const thr = Math.max(10, vals.length ? vals[Math.floor(vals.length * .7)] * .5 : 10);
+  return {w, h, k, thin, mag, gx, gy, thr, g};
+}
+function lineQuad(c) {
+  const E = edgeMap(c), {w, h, k, thin, gx, gy, thr, g} = E;
+  const diag = Math.ceil(Math.hypot(w, h)), NT = 180, NR = diag * 2 + 1;
+  const acc = new Float32Array(NT * NR), cs = new Float32Array(NT), sn = new Float32Array(NT);
+  for (let t = 0; t < NT; t++) { cs[t] = Math.cos(t * Math.PI / NT); sn[t] = Math.sin(t * Math.PI / NT); }
+  for (let y = 2; y < h - 2; y++) for (let X = 2; X < w - 2; X++) { const i = y*w + X; const m = thin[i]; if (m < thr) continue;
+    let th = Math.round(Math.atan2(gy[i], gx[i]) * 180 / Math.PI); th = ((th % 180) + 180) % 180;
+    for (let dt = -6; dt <= 6; dt++) { const t = (th + dt + NT) % NT; const r = Math.round(X * cs[t] + y * sn[t]) + diag; acc[t*NR + r] += 1; } }
+  // peaks
+  const peaks = [];
+  for (let t = 0; t < NT; t++) for (let r = 0; r < NR; r++) { const v = acc[t*NR + r]; if (v < 18) continue;
+    let mx = true;
+    for (let dt = -4; dt <= 4 && mx; dt++) for (let dr = -5; dr <= 5; dr++) { if (!dt && !dr) continue; let tt = t + dt, rr = r + dr;
+      if (tt < 0) { tt += NT; rr = 2*diag - rr; } else if (tt >= NT) { tt -= NT; rr = 2*diag - rr; }
+      if (rr < 0 || rr >= NR) continue; if (acc[tt*NR + rr] > v || (acc[tt*NR + rr] === v && (tt*NR + rr) < (t*NR + r))) { mx = false; break; } }
+    if (mx) peaks.push({t, r: r - diag, v}); }
+  peaks.sort((a, b) => b.v - a.v);
+  const lines = peaks.slice(0, 26);
+  const hor = lines.filter(l => Math.abs(l.t - 90) < 45), ver = lines.filter(l => Math.abs(l.t - 90) >= 45);
+  const inter = (a, b) => { const c1 = cs[a.t], s1 = sn[a.t], c2 = cs[b.t], s2 = sn[b.t], det = c1*s2 - s1*c2; if (Math.abs(det) < 1e-6) return null; return [(a.r*s2 - s1*b.r) / det, (c1*b.r - a.r*c2) / det]; };
+  // how much of a segment is backed by a real edge running along it
+  // share of a side backed by a real step edge (one surface -> another) with
+  // the same polarity along the whole side; printed lines and seams have the
+  // same surface on both sides and score nothing
+  const G = (x, y) => { const xx = Math.min(w - 1, Math.max(0, Math.round(x))), yy = Math.min(h - 1, Math.max(0, Math.round(y))); return g[yy*w + xx]; };
+  const support = (p, q, cx, cy) => { const L = Math.hypot(q[0]-p[0], q[1]-p[1]); if (L < 8) return 0; const n = Math.floor(L / 2);
+    let nx = -(q[1]-p[1]) / L, ny = (q[0]-p[0]) / L; const mx = (p[0]+q[0]) / 2, my = (p[1]+q[1]) / 2; if ((cx - mx) * nx + (cy - my) * ny < 0) { nx = -nx; ny = -ny; }
+    let pos = 0, neg = 0;
+    for (let s = 0; s <= n; s++) { const fx = p[0] + (q[0]-p[0]) * s / n, fy = p[1] + (q[1]-p[1]) * s / n; let ok = false;
+      for (let o = -2; o <= 2 && !ok; o++) { const xx = Math.round(fx + nx*o), yy = Math.round(fy + ny*o); if (xx < 1 || yy < 1 || xx >= w-1 || yy >= h-1) continue; const i = yy*w + xx;
+        if (thin[i] >= thr * .6) { const gl = Math.hypot(gx[i], gy[i]) || 1; if (Math.abs((gx[i]*nx + gy[i]*ny) / gl) > .75) ok = true; } }
+      if (!ok) continue;
+      const din = G(fx + nx*4, fy + ny*4) - G(fx - nx*4, fy - ny*4);
+      if (din > 4) pos++; else if (din < -4) neg++; }
+    return Math.max(pos, neg) / (n + 1); };
+  const area = q => { let a = 0; for (let i = 0; i < 4; i++) { const p = q[i], r = q[(i+1)%4]; a += p[0]*r[1] - r[0]*p[1]; } return Math.abs(a) / 2; };
+  let best = null, bestScore = 0; const cands = []; const mgx = w * .04, mgy = h * .04;
+  for (let a = 0; a < hor.length; a++) for (let b = a + 1; b < hor.length; b++) {
+    if (Math.abs(hor[a].t - hor[b].t) > 30) continue;
+    for (let cc = 0; cc < ver.length; cc++) for (let dd = cc + 1; dd < ver.length; dd++) {
+      const v1 = ver[cc], v2 = ver[dd]; let dt = Math.abs(v1.t - v2.t); dt = Math.min(dt, 180 - dt); if (dt > 30) continue;
+      const P = [inter(hor[a], v1), inter(hor[a], v2), inter(hor[b], v2), inter(hor[b], v1)]; if (P.some(p => !p)) continue;
+      if (P.some(p => p[0] < -mgx || p[1] < -mgy || p[0] > w + mgx || p[1] > h + mgy)) continue;
+      // order: top-left, top-right, bottom-right, bottom-left
+      const cx = P.reduce((s, p) => s + p[0], 0) / 4, cy = P.reduce((s, p) => s + p[1], 0) / 4;
+      P.sort((p, q) => Math.atan2(p[1]-cy, p[0]-cx) - Math.atan2(q[1]-cy, q[0]-cx));
+      let st = 0; for (let i = 1; i < 4; i++) if (P[i][0] + P[i][1] < P[st][0] + P[st][1]) st = i;
+      const Q = [0, 1, 2, 3].map(i => P[(st + i) % 4]);
+      if (!quadOk(Q, w, h)) continue;
+      const ar = area(Q) / (w * h); if (ar < .15 || ar > .995) continue;
+      const sup = [0, 1, 2, 3].map(i => support(Q[i], Q[(i+1)%4], cx, cy));
+      const mn = Math.min(...sup), avg = (sup[0] + sup[1] + sup[2] + sup[3]) / 4;
+      if (mn < .3 || avg < .45) continue;
+      const score = avg * (.6 + .4 * mn) + .3 * Math.sqrt(ar);
+      cands.push({Q, ar, avg, mn, score});
+      if (score > bestScore) { bestScore = score; best = Q; }
+    } }
+  if (!best) return null;
+  // the paper encloses its own content (text block, tables): among solid
+  // candidates that contain the best one, take the largest
+  const inside = (Q, p) => { for (let i = 0; i < 4; i++) { const a = Q[i], b = Q[(i+1)%4]; if ((b[0]-a[0])*(p[1]-a[1]) - (b[1]-a[1])*(p[0]-a[0]) < -3 * Math.hypot(b[0]-a[0], b[1]-a[1])) return false; } return true; };
+  let bestAr = 0; for (const cd of cands) if (cd.Q === best) bestAr = cd.ar;
+  for (const cd of cands) if (cd.ar > bestAr && cd.avg >= .5 && cd.mn >= .35 && best.every(p => inside(cd.Q, p))) { bestAr = cd.ar; best = cd.Q; }
+  const W = c.width, H = c.height;
+  return best.map(([X, Y]) => [Math.min(W, Math.max(0, X / k)), Math.min(H, Math.max(0, Y / k))]);
+}
+function detect(c) {
+  let q = null;
+  try { q = lineQuad(c); } catch (e) { console.error(e); }
+  if (!q) q = regionQuad(c);
+  return q || fullQuad(c.width, c.height);
 }
 function solve(A, b) {
   const n = b.length; A = A.map((r, i) => [...r, b[i]]);
@@ -417,7 +522,21 @@ function warp(c, q, max) {
   }
   ox.putImageData(od, 0, 0); return o;
 }
-const CURVE = new Uint8ClampedArray(256); for (let i = 0; i < 256; i++) CURVE[i] = 255 * Math.pow(i / 255, 1.55);
+const CURVE = new Uint8ClampedArray(256);
+for (let i = 0; i < 256; i++) { const v = i / 255; const t = v >= .9 ? 1 : Math.pow(v / .9, 1.8); CURVE[i] = 255 * t; } // paper -> pure white, ink deeper
+// unsharp mask: makes small print crisper
+function sharpen(c, amount) {
+  const w = c.width, h = c.height, x = c.getContext('2d', {willReadFrequently: true}), id = x.getImageData(0, 0, w, h), d = id.data;
+  const t = new Uint8ClampedArray(d.length), bl = new Uint8ClampedArray(d.length);
+  for (let y = 0; y < h; y++) { const r = y * w * 4; for (let X = 0; X < w; X++) { const i = r + X * 4, l = X > 0 ? i - 4 : i, rr = X < w - 1 ? i + 4 : i;
+    t[i] = (d[l] + 2*d[i] + d[rr]) >> 2; t[i+1] = (d[l+1] + 2*d[i+1] + d[rr+1]) >> 2; t[i+2] = (d[l+2] + 2*d[i+2] + d[rr+2]) >> 2; } }
+  const row = w * 4;
+  for (let y = 0; y < h; y++) for (let X = 0; X < w; X++) { const i = (y*w + X) * 4, u = y > 0 ? i - row : i, dn = y < h - 1 ? i + row : i;
+    bl[i] = (t[u] + 2*t[i] + t[dn]) >> 2; bl[i+1] = (t[u+1] + 2*t[i+1] + t[dn+1]) >> 2; bl[i+2] = (t[u+2] + 2*t[i+2] + t[dn+2]) >> 2; }
+  for (let i = 0; i < d.length; i += 4) { d[i] = d[i] + (d[i] - bl[i]) * amount; d[i+1] = d[i+1] + (d[i+1] - bl[i+1]) * amount; d[i+2] = d[i+2] + (d[i+2] - bl[i+2]) * amount; }
+  x.putImageData(id, 0, 0); return c;
+}
+
 function filt(src, f) {
   if (f === 'orig') return src;
   const w = src.width, h = src.height, N = w * h;
@@ -441,11 +560,13 @@ function filt(src, f) {
   const bx = bc.getContext('2d', {willReadFrequently: true}); bx.imageSmoothingEnabled = true; bx.imageSmoothingQuality = 'high'; bx.drawImage(gc, 0, 0, w, h);
   const bd = bx.getImageData(0, 0, w, h).data;
   for (let i = 0; i < N*4; i += 4) {
-    const r = Math.min(255, d[i] / Math.max(bd[i], 1) * 268), g = Math.min(255, d[i+1] / Math.max(bd[i+1], 1) * 268), b = Math.min(255, d[i+2] / Math.max(bd[i+2], 1) * 268);
+    const r = Math.min(255, d[i] / Math.max(bd[i], 1) * 272), g = Math.min(255, d[i+1] / Math.max(bd[i+1], 1) * 272), b = Math.min(255, d[i+2] / Math.max(bd[i+2], 1) * 272);
     if (f === 'enh') { d[i] = CURVE[r|0]; d[i+1] = CURVE[g|0]; d[i+2] = CURVE[b|0]; }
     else { const L = .299*r + .587*g + .114*b; const v = f === 'gray' ? CURVE[L|0] : L < 160 ? 0 : L > 205 ? 255 : (L - 160) / 45 * 255; d[i] = d[i+1] = d[i+2] = v; }
   }
-  x.putImageData(id, 0, 0); return src;
+  x.putImageData(id, 0, 0);
+  if (f !== 'bw') sharpen(src, f === 'enh' ? .9 : .8);
+  return src;
 }
 function rotate(c, r) {
   if (!r) return c;
@@ -461,7 +582,7 @@ async function getOrig(p) {
 async function renderPage(p) {
   const o = await getOrig(p);
   const c = rotate(filt(warp(o, p.quad, MAXP), p.filter), p.rot);
-  const blob = await toBlob(c, .88);
+  const blob = await toBlob(c, .9);
   const old = procKey(p);
   p.v = (p.v || 0) + 1; p.pw = c.width; p.ph = c.height;
   await putBlob(procKey(p), blob);
