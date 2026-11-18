@@ -269,7 +269,7 @@ svg.i{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.9;stro
 'use strict';
 const $ = s => document.querySelector(s);
 const MAXO = 3200, MAXP = 2900;
-const FILTERS = [['enh','محسّن','sparkle'],['gray','رمادي','tone'],['bw','أبيض وأسود','bw'],['orig','الأصلي','img']];
+const FILTERS = [['enh','محسّن','sparkle'],['doc','مستند','doc'],['gray','رمادي','tone'],['bw','أبيض وأسود','bw'],['orig','الأصلي','img']];
 const MONTHS = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
 const tick = (ms = 30) => new Promise(r => setTimeout(r, ms));
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -547,6 +547,9 @@ const CURVE = new Uint8ClampedArray(256);
 // input: pixel / local paper colour (255 = paper). Paper -> white, faint
 // print is stretched so light inks stay readable.
 for (let i = 0; i < 256; i++) { const r = i / 255; let t = (r - .45) / (.95 - .45); t = t < 0 ? 0 : t > 1 ? 1 : t; CURVE[i] = 255 * Math.pow(t, 1.35); }
+// gentle curve for the natural 'enh' look: paper to white, tones kept
+const SOFT = new Uint8ClampedArray(256);
+for (let i = 0; i < 256; i++) { const r = i / 255; let t = (r - .12) / (.97 - .12); t = t < 0 ? 0 : t > 1 ? 1 : t; SOFT[i] = 255 * Math.pow(t, 1.25); }
 // unsharp mask: makes small print crisper
 function blurPass(src, w, h, r) { // separable box blur, radius r
   const t = new Float32Array(src.length), o = new Float32Array(src.length), n = 2 * r + 1;
@@ -575,11 +578,20 @@ function sharpen(c, amount) {
   x.putImageData(id, 0, 0); return c;
 }
 
+function sharpenSoft(c, amount) {
+  const w = c.width, h = c.height, x = c.getContext('2d', {willReadFrequently: true}), id = x.getImageData(0, 0, w, h), d = id.data, N = w * h;
+  const L = new Uint8ClampedArray(N * 4);
+  for (let i = 0; i < N; i++) { const v = .299*d[i*4] + .587*d[i*4+1] + .114*d[i*4+2]; L[i*4] = L[i*4+1] = L[i*4+2] = v; }
+  const b = blurPass(L, w, h, Math.max(1, Math.round(Math.max(w, h) / 1600)));
+  for (let i = 0; i < N; i++) { const j = i * 4; if (L[j] >= 252) continue; const dl = (L[j] - b[j]) * amount; if (Math.abs(dl) < 1.5) continue; d[j] += dl; d[j+1] += dl; d[j+2] += dl; }
+  x.putImageData(id, 0, 0); return c;
+}
 function filt(src, f) {
   if (f === 'orig') return src;
   const w = src.width, h = src.height, N = w * h;
   const x = src.getContext('2d', {willReadFrequently: true}), id = x.getImageData(0, 0, w, h), d = id.data;
-  const cs = Math.max(6, Math.round(Math.max(w, h) / 75)), gw = Math.ceil(w / cs), gh = Math.ceil(h / cs);
+  const soft = f === 'enh';
+  const cs = Math.max(6, Math.round(Math.max(w, h) / (soft ? 28 : 75))), gw = Math.ceil(w / cs), gh = Math.ceil(h / cs);
   const cell = new Float32Array(gw * gh * 3), lum = new Float32Array(gw * gh);
   for (let gy = 0; gy < gh; gy++) for (let gx = 0; gx < gw; gx++) {
     const x0 = gx*cs, y0 = gy*cs, x1 = Math.min(w, x0+cs), y1 = Math.min(h, y0+cs); let s = 0, n = 0;
@@ -612,6 +624,12 @@ function filt(src, f) {
     if (f === 'bw') { const v = ratio < 185 ? 0 : ratio > 222 ? 255 : (ratio - 185) / 37 * 255; d[i] = d[i+1] = d[i+2] = v; continue; }
     const nL = CURVE[ratio | 0];
     if (f === 'gray') { d[i] = d[i+1] = d[i+2] = nL; continue; }
+    if (soft) { // natural: even lighting, white paper, smooth tones, real colours
+      const sL = SOFT[ratio | 0], C2 = Math.max(r0, g0, b0) - Math.min(r0, g0, b0);
+      if (sL > 250 || C2 < 20) { d[i] = d[i+1] = d[i+2] = sL; continue; }
+      const fade = Math.min(1, (C2 - 20) / 25);
+      const k2 = Math.min(1.5, Math.max(.8, sL / Math.max(L, 1))) * 1.08 * fade;
+      d[i] = sL + (r0 - L) * k2; d[i+1] = sL + (g0 - L) * k2; d[i+2] = sL + (b0 - L) * k2; continue; }
     const C = Math.max(r0, g0, b0) - Math.min(r0, g0, b0);
     const sat = C < 30 ? 0 : C > 75 ? 1.12 : (C - 30) / 45 * 1.12;
     if (!sat || nL > 246) { d[i] = d[i+1] = d[i+2] = nL; continue; }
@@ -621,7 +639,7 @@ function filt(src, f) {
     d[i] = tL + (r0 - L) * k; d[i+1] = tL + (g0 - L) * k; d[i+2] = tL + (b0 - L) * k;
   }
   x.putImageData(id, 0, 0);
-  if (f !== 'bw') sharpen(src, .85);
+  if (f === 'doc' || f === 'gray') sharpen(src, .85); else if (soft) sharpenSoft(src, .55);
   return src;
 }
 function rotate(c, r) {
