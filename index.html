@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>SJscanner</title>
+<meta name="description" content="SJscanner — ماسح مستندات: قص تلقائي للحواف، فلاتر، PDF، واستخراج النص.">
+<meta name="theme-color" content="#F1F5F4" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0E1414" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="SJscanner">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="format-detection" content="telephone=no">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+<link rel="stylesheet" href="styles.css?v=1">
+</head>
+<body>
+
+<!-- ============ HOME ============ -->
+<section id="home" class="view">
+  <header class="home-head">
+    <div class="brand">
+      <img src="icons/logo.svg" alt="" class="brand-logo">
+      <div>
+        <h1>SJscanner</h1>
+        <p>ماسح المستندات</p>
+      </div>
+    </div>
+  </header>
+
+  <div id="installHint" class="install-hint hidden">
+    <div>
+      <b>ثبّته كتطبيق</b>
+      <span>اضغط زر المشاركة <i class="ico ico-sm" data-i="share"></i> في Safari ثم «إضافة إلى الشاشة الرئيسية».</span>
+    </div>
+    <button class="icon-btn" id="hintClose" aria-label="إغلاق"><i class="ico" data-i="x"></i></button>
+  </div>
+
+  <div class="search-wrap" id="searchWrap">
+    <i class="ico" data-i="search"></i>
+    <input id="search" type="search" placeholder="ابحث في مستنداتك" autocomplete="off">
+  </div>
+
+  <h2 class="section-title" id="listTitle">مستنداتي</h2>
+  <div id="docList" class="doc-list"></div>
+
+  <div id="empty" class="empty hidden">
+    <div class="hero">
+      <img src="icons/logo.svg" alt="">
+    </div>
+    <h2>امسح مستنداتك بوضوح</h2>
+    <p>قصّ تلقائي للحواف، تصحيح الميلان،<br>وفلاتر تجعل الورقة بيضاء ونظيفة.</p>
+  </div>
+  <div id="noResults" class="no-results hidden">لا توجد نتائج مطابقة</div>
+
+  <div class="bottom-bar">
+    <button class="btn btn-outline" id="homeGallery"><i class="ico" data-i="image"></i>المعرض</button>
+    <button class="btn btn-primary" id="homeCamera"><i class="ico" data-i="camera"></i>تصوير بالكاميرا</button>
+  </div>
+</section>
+
+<!-- ============ DOCUMENT ============ -->
+<section id="doc" class="view hidden">
+  <header class="top-bar">
+    <button class="icon-btn" id="docBack" aria-label="رجوع"><i class="ico" data-i="back"></i></button>
+    <button class="doc-title" id="docTitle"><span id="docName"></span><i class="ico ico-sm" data-i="edit"></i></button>
+    <button class="icon-btn" id="docMore" aria-label="المزيد"><i class="ico" data-i="more"></i></button>
+  </header>
+
+  <div class="pager-wrap">
+    <div id="pager" class="pager"></div>
+    <div class="page-ind" id="pageInd">1 / 1</div>
+  </div>
+
+  <div class="filters" id="filters">
+    <button data-f="orig">الأصلي</button>
+    <button data-f="enh">محسّن</button>
+    <button data-f="gray">رمادي</button>
+    <button data-f="bw">أبيض وأسود</button>
+  </div>
+
+  <div class="tools">
+    <button class="tool" id="tRotate"><i class="ico" data-i="rotate"></i><span>تدوير</span></button>
+    <button class="tool" id="tCrop"><i class="ico" data-i="crop"></i><span>قص</span></button>
+    <button class="tool" id="tText"><i class="ico" data-i="text"></i><span>النص</span></button>
+    <button class="tool" id="tOrder"><i class="ico" data-i="reorder"></i><span>ترتيب</span></button>
+    <button class="tool" id="tDelete"><i class="ico" data-i="trash"></i><span>حذف</span></button>
+  </div>
+
+  <div class="bottom-bar">
+    <button class="btn btn-outline" id="docAdd"><i class="ico" data-i="plus"></i>إضافة صفحة</button>
+    <button class="btn btn-primary" id="docShare"><i class="ico" data-i="share"></i>مشاركة PDF</button>
+  </div>
+</section>
+
+<!-- ============ CROP ============ -->
+<section id="crop" class="view hidden">
+  <header class="crop-head">
+    <h2>حدّد حواف الورقة</h2>
+    <p>اسحب الزوايا لتعديل القص</p>
+  </header>
+  <div class="crop-stage" id="cropStage">
+    <div class="crop-box" id="cropBox">
+      <img id="cropImg" alt="">
+      <svg id="cropSvg"></svg>
+    </div>
+  </div>
+  <div class="crop-actions">
+    <button class="chip-dark" id="cAuto"><i class="ico ico-sm" data-i="sparkle"></i>تلقائي</button>
+    <button class="chip-dark" id="cFull"><i class="ico ico-sm" data-i="expand"></i>كامل الصورة</button>
+  </div>
+  <div class="bottom-bar dark">
+    <button class="btn btn-ghost-dark" id="cCancel">إلغاء</button>
+    <button class="btn btn-primary" id="cOk"><i class="ico" data-i="check"></i>تأكيد</button>
+  </div>
+</section>
+
+<!-- ============ OVERLAYS ============ -->
+<div id="scrim" class="scrim hidden"></div>
+<div id="sheet" class="sheet hidden" role="dialog" aria-modal="true">
+  <div class="grabber"></div>
+  <div id="sheetBody"></div>
+</div>
+
+<div id="busy" class="busy hidden">
+  <div class="busy-card">
+    <div class="spinner"></div>
+    <div id="busyText">جارٍ التجهيز…</div>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<input type="file" id="camIn" accept="image/*" capture="environment" hidden>
+<input type="file" id="galIn" accept="image/*" multiple hidden>
+
+<script src="app.js?v=1"></script>
+</body>
+</html>
